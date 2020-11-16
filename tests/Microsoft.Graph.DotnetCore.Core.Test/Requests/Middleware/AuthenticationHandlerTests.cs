@@ -288,8 +288,7 @@ namespace Microsoft.Graph.DotnetCore.Core.Test.Requests
 
             var response = await invoker.SendAsync(httpRequestMessage, new CancellationToken());
 
-            var requestContext = response.RequestMessage.Properties[typeof(GraphRequestContext).ToString()] as GraphRequestContext;
-            Assert.NotNull(requestContext);
+            var requestContext = response.RequestMessage.GetRequestContext();
 
             var middleWareOption = requestContext.MiddlewareOptions[typeof(AuthenticationHandlerOption).ToString()] as AuthenticationHandlerOption;
             Assert.NotNull(middleWareOption);
