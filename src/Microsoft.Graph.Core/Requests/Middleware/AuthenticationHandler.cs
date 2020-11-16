@@ -7,7 +7,11 @@ namespace Microsoft.Graph
     using System.Net.Http;
     using System.Threading;
     using System.Threading.Tasks;
+    using System;
+    using System.Linq;
     using System.Net;
+    using System.Text;
+
     /// <summary>
     /// A <see cref="DelegatingHandler"/> implementation using standard .NET libraries.
     /// </summary>
@@ -77,8 +81,14 @@ namespace Microsoft.Graph
                 // general clone request with internal CloneAsync (see CloneAsync for details) extension method 
                 var newRequest = await httpResponseMessage.RequestMessage.CloneAsync();
 
-                // Authenticate request using AuthenticationProvider
+                // extract the www-authenticate header and add claims to the request context
+                if (httpResponseMessage.Headers.WwwAuthenticate.Any())
+                {
+                    string wwwAuthenticateHeader = httpResponseMessage.Headers.WwwAuthenticate.ToString();
+                    AddClaimsToRequestContext(wwwAuthenticateHeader, newRequest);
+                }
 
+                // Authenticate request using AuthenticationProvider
                 await authProvider.AuthenticateRequestAsync(newRequest);
                 httpResponseMessage = await base.SendAsync(newRequest, cancellationToken);
 
@@ -130,6 +140,32 @@ namespace Microsoft.Graph
                 // We will add this check once we re-write a new HttpProvider.
                 return await base.SendAsync(httpRequestMessage, cancellationToken);
             }
+        }
+
+        private void AddClaimsToRequestContext(string wwwAuthenticateHeader, HttpRequestMessage newRequest)
+        {
+            int claimsStart = wwwAuthenticateHeader.IndexOf("claims=", StringComparison.OrdinalIgnoreCase);
+            if (claimsStart < 0) 
+                return; // do nothing as there is no claims in www Authenticate Header
+
+            claimsStart += 8; // jump to the index after the opening quotation mark
+
+            // extract and decode the Base 64 encoded claims property
+            byte[] bytes = Convert.FromBase64String(wwwAuthenticateHeader.Substring(claimsStart, wwwAuthenticateHeader.Length - claimsStart - 1));
+            string claimsChallengeFromRp = Encoding.UTF8.GetString(bytes, 0, bytes.Length);
+
+            // Try to get the current options otherwise create new ones
+            AuthenticationHandlerOption authenticationHandlerOption = newRequest.GetMiddlewareOption<AuthenticationHandlerOption>() ?? AuthOption;
+            CaeAuthenticationProviderOption caeAuthenticationProviderOption = authenticationHandlerOption.AuthenticationProviderOption as CaeAuthenticationProviderOption ?? new CaeAuthenticationProviderOption();
+
+            // update the claims property in the options
+            caeAuthenticationProviderOption.Claims = claimsChallengeFromRp;
+            authenticationHandlerOption.AuthenticationProviderOption = caeAuthenticationProviderOption;
+
+            // update the request context with the updated options
+            GraphRequestContext requestContext = newRequest.GetRequestContext();
+            requestContext.MiddlewareOptions[typeof(AuthenticationHandlerOption).ToString()] = authenticationHandlerOption;
+            newRequest.Properties[typeof(GraphRequestContext).ToString()] = requestContext;
         }
     }
 }

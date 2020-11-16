@@ -8,6 +8,7 @@ namespace Microsoft.Graph.DotnetCore.Core.Test.Requests
     using System;
     using System.Net;
     using System.Net.Http;
+    using System.Net.Http.Headers;
     using System.Threading;
     using Xunit;
     using System.Threading.Tasks;
@@ -267,6 +268,40 @@ namespace Microsoft.Graph.DotnetCore.Core.Test.Requests
                 Assert.Same(ex.Error.Code, ErrorConstants.Codes.InvalidRequest);
                 Assert.Same(ex.Error.Message, ErrorConstants.Messages.AuthenticationProviderMissing);
             }
+        }
+
+        [Fact]
+        public async Task AuthHandler_ShouldRetryUnauthorizedGetRequestAndExtractWWWAuthenticateHeaders()
+        {
+            var httpRequestMessage = new HttpRequestMessage(HttpMethod.Get, "http://example.com/bar");
+            
+            var unauthorizedResponse = new HttpResponseMessage(HttpStatusCode.Unauthorized);
+            unauthorizedResponse.Headers.WwwAuthenticate.Add(
+                new AuthenticationHeaderValue("authorization_url", 
+                    "authorization_url=\"https://login.microsoftonline.com/common/oauth2/authorize\"," +
+                            "error=\"insufficient_claims\"," +
+                            "claims=\"eyJhY2Nlc3NfdG9rZW4iOnsibmJmIjp7ImVzc2VudGlhbCI6ZmFsc2UsInZhbHVlIjoxNTM5Mjg0Mzc2fX19\""));
+
+            var expectedResponse = new HttpResponseMessage(HttpStatusCode.OK);
+
+            testHttpMessageHandler.SetHttpResponse(unauthorizedResponse, expectedResponse);
+
+            var response = await invoker.SendAsync(httpRequestMessage, new CancellationToken());
+
+            var requestContext = response.RequestMessage.Properties[typeof(GraphRequestContext).ToString()] as GraphRequestContext;
+            Assert.NotNull(requestContext);
+
+            var middleWareOption = requestContext.MiddlewareOptions[typeof(AuthenticationHandlerOption).ToString()] as AuthenticationHandlerOption;
+            Assert.NotNull(middleWareOption);
+
+            var authProviderOption = middleWareOption.AuthenticationProviderOption as CaeAuthenticationProviderOption;
+            Assert.NotNull(authProviderOption);
+
+            // Assert the decoded claims string is as expected
+            Assert.Equal("{\"access_token\":{\"nbf\":{\"essential\":false,\"value\":1539284376}}}", authProviderOption.Claims);
+            Assert.Same(response, expectedResponse);
+            Assert.NotSame(response.RequestMessage, httpRequestMessage);
+            Assert.Equal("","");
         }
     }
 }
